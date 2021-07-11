@@ -262,9 +262,9 @@ fn parse_request(env_vars: HashMap<String, String>, stdin: Vec<u8>) -> Request {
     let uri = if env_vars.get("X_FULL_URL").unwrap_or(&"".to_owned()) != "" {
         env_vars["X_FULL_URL"].to_owned()
     } else if env_vars.get("QUERY_STRING").unwrap_or(&"".to_owned()) != "" {
-        format!("http://{}/{}?{}", env_vars["HTTP_HOST"], env_vars["PATH_INFO"], env_vars["QUERY_STRING"])
+        format!("{}?{}", env_vars["SCRIPT_NAME"], env_vars["QUERY_STRING"])
     } else {
-        format!("http://{}/{}", env_vars["HTTP_HOST"], env_vars["PATH_INFO"])
+        env_vars["SCRIPT_NAME"].to_owned()
     };
     req = req.uri(uri.as_str());
 
