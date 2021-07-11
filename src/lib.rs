@@ -1,21 +1,21 @@
 //! Easily create CGI (RFC 3875) programmes in Rust based on hyper's [`http`](https://github.com/hyperium/http) types.
-//! 
+//!
 //! # Installation & Usage
-//! 
+//!
 //! `Cargo.toml`:
-//! 
+//!
 //! ```cargo,ignore
 //! [dependencies]
-//! cgi = "0.3"
+//! cgi = "0.6"
 //! ```
-//! 
+//!
 //!
 //! Use the [`cgi_main!`](macro.cgi_main.html) macro, with a function that takes a `cgi::Request` and returns a
 //! `cgi::Response`.
-//! 
+//!
 //! ```rust
 //! extern crate cgi;
-//! 
+//!
 //! cgi::cgi_main! { |request: cgi::Request| -> cgi::Response {
 //!      cgi::text_response(200, "Hello World")
 //! } }
@@ -25,14 +25,14 @@
 //!
 //! ```rust
 //! extern crate cgi;
-//! 
+//!
 //! cgi::cgi_try_main! { |request: cgi::Request| -> Result<cgi::Response, String> {
 //!     let greeting = std::fs::read_to_string("greeting.txt").map_err(|_| "Couldn't open file")?;
 //!
 //!     Ok(cgi::text_response(200, greeting))
 //! } }
 //! ```
-//! 
+//!
 //! It will parse & extract the CGI environmental variables, and the HTTP request body to create
 //! `Request<u8>`, call your function to create a response, and convert your `Response` into the
 //! correct format and print to stdout. If this programme is not called as CGI (e.g. missing
@@ -42,7 +42,7 @@
 //!
 //! ```rust,ignore
 //! extern crate cgi;
-//! 
+//!
 //! fn main() { cgi::handle(|request: cgi::Request| -> cgi::Response {
 //!      cgi::empty_response(404)
 //! })}
@@ -70,7 +70,7 @@ pub type Response = http::Response<Vec<u8>>;
 /// to create `Request`, and convert your `Response` into the correct format and
 /// print to stdout. If this programme is not called as CGI (e.g. missing required
 /// environmental variables), it will panic.
-pub fn handle<F>(func: F) 
+pub fn handle<F>(func: F)
     where F: FnOnce(Request) -> Response
 {
     let env_vars: HashMap<String, String> = std::env::vars().collect();
@@ -81,7 +81,9 @@ pub fn handle<F>(func: F)
         .and_then(|cl| cl.parse::<usize>().ok()).unwrap_or(0);
 
     let mut stdin_contents = vec![0; content_length];
-    stdin().read_exact(&mut stdin_contents).unwrap();
+    if content_length > 0 {
+        stdin().read_exact(&mut stdin_contents).unwrap();
+    }
 
     let request = parse_request(env_vars, stdin_contents);
 
@@ -97,10 +99,10 @@ pub fn handle<F>(func: F)
 ///
 /// Use the `cgi_main` macro, with a function that takes a `cgi::Request` and returns a
 /// `cgi::Response`.
-/// 
+///
 /// ```rust
 /// extern crate cgi;
-/// 
+///
 /// cgi::cgi_main! { |request: cgi::Request| -> cgi::Response {
 ///     cgi::empty_response(200)
 /// } }
@@ -124,7 +126,7 @@ macro_rules! cgi_main {
 ///
 /// ```rust
 /// extern crate cgi;
-/// 
+///
 /// cgi::cgi_try_main! { |request: cgi::Request| -> Result<cgi::Response, String> {
 ///     let f = std::fs::read_to_string("greeting.txt").map_err(|_| "Couldn't open file")?;
 ///
@@ -195,7 +197,7 @@ pub fn string_response<T, S>(status_code: T, body: S) -> Response
 ///
 /// ```rust,ignore
 /// extern crate cgi;
-/// 
+///
 /// cgi::cgi_main! { |request: cgi::Request| -> cgi::Response {
 ///   cgi::text_response(200, "Hello world");
 /// } }
@@ -245,7 +247,7 @@ pub fn binary_response<'a, T>(status_code: T, content_type: impl Into<Option<&'a
         .status(status_code)
         .header(http::header::CONTENT_LENGTH, format!("{}", body.len()).as_str());
 
-    if let Some(ct)  = content_type {
+    if let Some(ct) = content_type {
         response = response.header(http::header::CONTENT_TYPE, ct);
     }
 
@@ -257,10 +259,12 @@ fn parse_request(env_vars: HashMap<String, String>, stdin: Vec<u8>) -> Request {
     let mut req = http::Request::builder();
 
     req = req.method(env_vars["REQUEST_METHOD"].as_str());
-    let uri = if env_vars.get("QUERY_STRING").unwrap_or(&"".to_owned()) != "" {
-        format!("{}?{}", env_vars["SCRIPT_NAME"], env_vars["QUERY_STRING"])
+    let uri = if env_vars.get("X_FULL_URL").unwrap_or(&"".to_owned()) != "" {
+        env_vars["X_FULL_URL"].to_owned()
+    } else if env_vars.get("QUERY_STRING").unwrap_or(&"".to_owned()) != "" {
+        format!("http://{}/{}?{}", env_vars["HTTP_HOST"], env_vars["PATH_INFO"], env_vars["QUERY_STRING"])
     } else {
-        env_vars["SCRIPT_NAME"].to_owned()
+        format!("http://{}/{}", env_vars["HTTP_HOST"], env_vars["PATH_INFO"])
     };
     req = req.uri(uri.as_str());
 
@@ -274,7 +278,7 @@ fn parse_request(env_vars: HashMap<String, String>, stdin: Vec<u8>) -> Request {
         } else if v == "HTTP/2.0" {
             req = req.version(http::version::Version::HTTP_2);
         } else {
-            unimplemented!("Unsupport HTTP SERVER_PROTOCOL {:?}", v);
+            req = req.version(http::version::Version::HTTP_11);
         }
     }
 
@@ -302,7 +306,6 @@ fn parse_request(env_vars: HashMap<String, String>, stdin: Vec<u8>) -> Request {
     req = add_header(req, &env_vars, "SERVER_SOFTWARE", "X-CGI-Server-Software");
 
     req.body(stdin).unwrap()
-    
 }
 
 // add the CGI request meta-variables as X-CGI- headers
@@ -359,10 +362,10 @@ mod tests {
     #[test]
     fn test_parse_request() {
         let env_vars = env(vec![
-           ("REQUEST_METHOD", "GET"), ("SCRIPT_NAME", "/my/path/script"),
-           ("SERVER_PROTOCOL", "HTTP/1.0"), ("HTTP_USER_AGENT", "MyBrowser/1.0"),
-           ("QUERY_STRING", "foo=bar&baz=bop"),
-           ]);
+            ("REQUEST_METHOD", "GET"), ("SCRIPT_NAME", "/my/path/script"), ("PATH_INFO", "/my/path/script")
+                ("SERVER_PROTOCOL", "HTTP/1.0"), ("HTTP_USER_AGENT", "MyBrowser/1.0"),
+            ("QUERY_STRING", "foo=bar&baz=bop"),
+        ]);
         let stdin = Vec::new();
         let req = parse_request(env_vars, stdin);
         assert_eq!(req.method(), &http::method::Method::GET);
@@ -391,7 +394,7 @@ mod tests {
         test_serialized_response(
             http::Response::builder().status(200),
             "Hello World",
-            "Status: 200 OK\n\nHello World"
+            "Status: 200 OK\n\nHello World",
         );
 
         test_serialized_response(
@@ -400,31 +403,30 @@ mod tests {
                 .header("Content-Language", "en")
                 .header("Cache-Control", "max-age=3600"),
             "<html><body><h1>Hello</h1></body></html>",
-            "Status: 200 OK\ncache-control: max-age=3600\ncontent-language: en\ncontent-type: text/html\n\n<html><body><h1>Hello</h1></body></html>"
+            "Status: 200 OK\ncache-control: max-age=3600\ncontent-language: en\ncontent-type: text/html\n\n<html><body><h1>Hello</h1></body></html>",
         );
     }
 
     #[test]
     fn test_shortcuts1() {
         assert_eq!(std::str::from_utf8(&serialize_response(html_response(200, "<html><body><h1>Hello World</h1></body></html>"))).unwrap(),
-            "Status: 200 OK\ncontent-length: 46\ncontent-type: text/html; charset=utf-8\n\n<html><body><h1>Hello World</h1></body></html>"
+                   "Status: 200 OK\ncontent-length: 46\ncontent-type: text/html; charset=utf-8\n\n<html><body><h1>Hello World</h1></body></html>"
         );
     }
 
     #[test]
     fn test_shortcuts2() {
         assert_eq!(std::str::from_utf8(&serialize_response(binary_response(200, None, vec![65, 66, 67]))).unwrap(),
-            "Status: 200 OK\ncontent-length: 3\n\nABC"
+                   "Status: 200 OK\ncontent-length: 3\n\nABC"
         );
 
         assert_eq!(std::str::from_utf8(&serialize_response(binary_response(200, "application/octet-stream", vec![65, 66, 67]))).unwrap(),
-            "Status: 200 OK\ncontent-length: 3\ncontent-type: application/octet-stream\n\nABC"
+                   "Status: 200 OK\ncontent-length: 3\ncontent-type: application/octet-stream\n\nABC"
         );
 
         let ct: String = "image/png".to_string();
         assert_eq!(std::str::from_utf8(&serialize_response(binary_response(200, ct.as_str(), vec![65, 66, 67]))).unwrap(),
-            "Status: 200 OK\ncontent-length: 3\ncontent-type: image/png\n\nABC"
+                   "Status: 200 OK\ncontent-length: 3\ncontent-type: image/png\n\nABC"
         );
     }
-
 }
